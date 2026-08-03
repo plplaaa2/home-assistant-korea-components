@@ -780,10 +780,23 @@ class KoreaOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
         self._config_entry = config_entry
+        self._safety_alert_data: Dict[str, Any] = {}
 
     async def async_step_init(self, user_input: Optional[Dict[str, Any]] = None):
         """Manage the options."""
         service = self._config_entry.data.get("service")
+        if service == ENTRY_SAFETY_ALERT:
+            return await self.async_step_safety_alert_options_sido(user_input)
+        if service == ENTRY_ARISU:
+            return await self.async_step_arisu_options(user_input)
+        if service == ENTRY_KEPCO:
+            return await self.async_step_kepco_options(user_input)
+        if service == ENTRY_GASAPP:
+            return await self.async_step_gasapp_options(user_input)
+        if service == ENTRY_GOODSFLOW:
+            return await self.async_step_goodsflow_options(user_input)
+        if service == ENTRY_KAKAOMAP:
+            return await self.async_step_kakaomap_options(user_input)
         if service in [ENTRY_WEATHER, ENTRY_TRANSIT, ENTRY_FUEL, ENTRY_SCHOOL, ENTRY_DISASTER, ENTRY_SAFETY_ALERT, ENTRY_KEPCO, ENTRY_GASAPP, ENTRY_ARISU, ENTRY_PHARMACY, ENTRY_AIRKOREA, ENTRY_KMA_WEATHER, ENTRY_EARTHQUAKE, ENTRY_GOODSFLOW, ENTRY_KAKAOMAP]:
             # 새 서비스들은 옵션 플로우에서 기본 스키마 제공 가능 (필요시 상세 구현)
             if service == ENTRY_WEATHER:
@@ -794,6 +807,419 @@ class KoreaOptionsFlow(config_entries.OptionsFlow):
                     vol.Required("area_codes", default=self._config_entry.data.get("area_codes", [])): SelectSelector(SelectSelectorConfig(options=area_options, multiple=True, mode=SelectSelectorMode.DROPDOWN)),
                 }))
             return self.async_abort(reason=f"no_options_{service}")
+
+    async def async_step_kakaomap_options(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Reconfigure KakaoMap route coordinates."""
+        errors: Dict[str, str] = {}
+        current_start = self._config_entry.data.get("start_coords", {})
+        current_end = self._config_entry.data.get("end_coords", {})
+        if user_input is not None:
+            try:
+                coord_system = user_input.get("coord_system", "WCONGNAMUL")
+                start_input = {
+                    "longitude" if coord_system == "WGS84" else "x": float(user_input["start_x"]),
+                    "latitude" if coord_system == "WGS84" else "y": float(user_input["start_y"]),
+                }
+                end_input = {
+                    "longitude" if coord_system == "WGS84" else "x": float(user_input["end_x"]),
+                    "latitude" if coord_system == "WGS84" else "y": float(user_input["end_y"]),
+                }
+                if not validate_coordinates(start_input, coord_system):
+                    errors["start_x"] = "invalid_coordinates"
+                if not validate_coordinates(end_input, coord_system):
+                    errors["end_x"] = "invalid_coordinates"
+                if not errors:
+                    async with aiohttp.ClientSession() as session:
+                        client = KakaoMapApiClient(session)
+                        if coord_system == "WGS84":
+                            start_coords = convert_coordinates(start_input, "WGS84", "WCONGNAMUL")
+                            end_coords = convert_coordinates(end_input, "WGS84", "WCONGNAMUL")
+                        else:
+                            start_coords, end_coords = start_input, end_input
+                        address = await client.async_coordinate_to_address(
+                            start_coords["x"], start_coords["y"]
+                        )
+                    if not address.get("success"):
+                        errors["base"] = "invalid_coordinates"
+                    else:
+                        data = dict(self._config_entry.data)
+                        data.update(
+                            {
+                                "name": user_input["name"],
+                                "start_coords": start_coords,
+                                "end_coords": end_coords,
+                                "original_coord_system": coord_system,
+                            }
+                        )
+                        self.hass.config_entries.async_update_entry(
+                            self._config_entry,
+                            data=data,
+                            title=f"카카오맵 ({data['name']})",
+                        )
+                        await self.hass.config_entries.async_reload(
+                            self._config_entry.entry_id
+                        )
+                        return self.async_create_entry(title="", data={})
+            except (TypeError, ValueError):
+                errors["base"] = "invalid_coordinates"
+            except Exception as err:
+                LOGGER.error("KakaoMap reconfiguration failed: %s", err)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="kakaomap_options",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "name", default=self._config_entry.data.get("name", "집↔회사")
+                    ): str,
+                    vol.Required("coord_system", default="WCONGNAMUL"): vol.In(
+                        ["WCONGNAMUL", "WGS84"]
+                    ),
+                    vol.Required(
+                        "start_x", default=str(current_start.get("x", 515290))
+                    ): str,
+                    vol.Required(
+                        "start_y", default=str(current_start.get("y", 1122478))
+                    ): str,
+                    vol.Required(
+                        "end_x", default=str(current_end.get("x", 506190))
+                    ): str,
+                    vol.Required(
+                        "end_y", default=str(current_end.get("y", 1110730))
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_goodsflow_options(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Reconfigure GoodsFlow token."""
+        errors: Dict[str, str] = {}
+        if user_input is not None:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    client = GoodsFlowApiClient(session)
+                    client.set_token(user_input["token"])
+                    valid = await client.async_validate_token()
+                if not valid:
+                    errors["base"] = "invalid_auth"
+                else:
+                    data = dict(self._config_entry.data)
+                    data["token"] = user_input["token"]
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry, data=data
+                    )
+                    await self.hass.config_entries.async_reload(
+                        self._config_entry.entry_id
+                    )
+                    return self.async_create_entry(title="", data={})
+            except GoodsFlowAuthError:
+                errors["base"] = "invalid_auth"
+            except Exception as err:
+                LOGGER.error("GoodsFlow reconfiguration failed: %s", err)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="goodsflow_options",
+            data_schema=vol.Schema(
+                {
+                    # Do not expose the stored token in the reconfiguration form.
+                    vol.Required("token"): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_gasapp_options(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Reconfigure GasApp credentials."""
+        errors: Dict[str, str] = {}
+        if user_input is not None:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    client = GasAppApiClient(session)
+                    client.set_credentials(
+                        user_input["token"],
+                        user_input["member_id"],
+                        user_input["use_contract_num"],
+                    )
+                    valid = await client.async_validate_credentials()
+                if not valid:
+                    errors["base"] = "invalid_auth"
+                else:
+                    data = dict(self._config_entry.data)
+                    data.update(
+                        {
+                            "token": user_input["token"],
+                            "member_id": user_input["member_id"],
+                            "use_contract_num": user_input["use_contract_num"],
+                        }
+                    )
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry,
+                        data=data,
+                        title=f"가스앱 ({data['use_contract_num']})",
+                    )
+                    await self.hass.config_entries.async_reload(
+                        self._config_entry.entry_id
+                    )
+                    return self.async_create_entry(title="", data={})
+            except GasAppAuthError:
+                errors["base"] = "invalid_auth"
+            except Exception as err:
+                LOGGER.error("GasApp reconfiguration failed: %s", err)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="gasapp_options",
+            data_schema=vol.Schema(
+                {
+                    # Do not expose the stored token in the reconfiguration form.
+                    vol.Required("token"): str,
+                    vol.Required(
+                        "member_id",
+                        default=self._config_entry.data.get("member_id", ""),
+                    ): str,
+                    vol.Required(
+                        "use_contract_num",
+                        default=self._config_entry.data.get("use_contract_num", ""),
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_kepco_options(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Reconfigure KEPCO credentials."""
+        errors: Dict[str, str] = {}
+        if user_input is not None:
+            try:
+                async with curl_cffi.AsyncSession() as session:
+                    client = KepcoApiClient(session)
+                    client.set_credentials(
+                        user_input[CONF_USERNAME], user_input[CONF_PASSWORD]
+                    )
+                    authenticated = await client.async_login(
+                        user_input[CONF_USERNAME], user_input[CONF_PASSWORD]
+                    )
+                if not authenticated:
+                    errors["base"] = "invalid_auth"
+                else:
+                    data = dict(self._config_entry.data)
+                    data.update(
+                        {
+                            CONF_USERNAME: user_input[CONF_USERNAME],
+                            CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        }
+                    )
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry,
+                        data=data,
+                        title=f"한전 ({data[CONF_USERNAME]})",
+                    )
+                    await self.hass.config_entries.async_reload(
+                        self._config_entry.entry_id
+                    )
+                    return self.async_create_entry(title="", data={})
+            except KepcoAuthError:
+                errors["base"] = "invalid_auth"
+            except Exception as err:
+                LOGGER.error("KEPCO reconfiguration failed: %s", err)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="kepco_options",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_USERNAME,
+                        default=self._config_entry.data.get(CONF_USERNAME, ""),
+                    ): str,
+                    # Do not prefill or expose the stored password in the form.
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_arisu_options(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Reconfigure Arisu customer credentials."""
+        errors: Dict[str, str] = {}
+        if user_input is not None:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    client = ArisuApiClient(session)
+                    bill_data = await client.async_get_water_bill_data(
+                        user_input["customer_number"], user_input["customer_name"]
+                    )
+                if not bill_data.get("success", False):
+                    errors["base"] = "invalid_auth"
+                else:
+                    data = dict(self._config_entry.data)
+                    data.update(
+                        {
+                            "customer_number": user_input["customer_number"],
+                            "customer_name": user_input["customer_name"],
+                        }
+                    )
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry,
+                        data=data,
+                        title=f"아리수 ({data['customer_number']})",
+                    )
+                    await self.hass.config_entries.async_reload(
+                        self._config_entry.entry_id
+                    )
+                    return self.async_create_entry(title="", data={})
+            except ArisuAuthError:
+                errors["base"] = "invalid_auth"
+            except Exception as err:
+                LOGGER.error("Arisu reconfiguration failed: %s", err)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="arisu_options",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "customer_number",
+                        default=self._config_entry.data.get("customer_number", ""),
+                    ): str,
+                    vol.Required(
+                        "customer_name",
+                        default=self._config_entry.data.get("customer_name", ""),
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_safety_alert_options_sido(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Select the province for Safety Alert reconfiguration."""
+        if user_input is not None:
+            sido_code = user_input["sido_code"]
+            self._safety_alert_data["sido_code"] = sido_code
+            self._safety_alert_data["sido_name"] = self._safety_alert_data[
+                "sido_options"
+            ][sido_code]
+            return await self.async_step_safety_alert_options_sgg()
+
+        client = SafetyAlertRegionApiClient()
+        sido_list = await client.async_get_sido_list()
+        sido_options = {region["code"]: region["name"] for region in sido_list}
+        self._safety_alert_data["sido_options"] = sido_options
+        return self.async_show_form(
+            step_id="safety_alert_options_sido",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "sido_code",
+                        default=self._config_entry.data.get("sido_code", "1100000000"),
+                    ): vol.In(sido_options),
+                }
+            ),
+        )
+
+    async def async_step_safety_alert_options_sgg(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Select the district for Safety Alert reconfiguration."""
+        sido_code = self._safety_alert_data["sido_code"]
+        if user_input is not None:
+            sgg_code = user_input["sgg_code"]
+            self._safety_alert_data["sgg_code"] = sgg_code
+            self._safety_alert_data["sgg_name"] = self._safety_alert_data[
+                "sgg_options"
+            ][sgg_code]
+            return await self.async_step_safety_alert_options_emd()
+
+        client = SafetyAlertRegionApiClient()
+        sgg_list = await client.async_get_sgg_list(sido_code)
+        if not sgg_list:
+            return self.async_abort(reason="cannot_connect")
+        sgg_options = {region["code"]: region["name"] for region in sgg_list}
+        self._safety_alert_data["sgg_options"] = sgg_options
+        current_sgg = self._config_entry.data.get("area_code2", "")
+        default_sgg = current_sgg if current_sgg in sgg_options else next(iter(sgg_options))
+        return self.async_show_form(
+            step_id="safety_alert_options_sgg",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "sgg_code",
+                        default=default_sgg,
+                    ): vol.In(sgg_options),
+                }
+            ),
+            description_placeholders={
+                "sido_name": self._safety_alert_data["sido_name"]
+            },
+        )
+
+    async def async_step_safety_alert_options_emd(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ):
+        """Select the sub-district and save Safety Alert options."""
+        sido_code = self._safety_alert_data["sido_code"]
+        sgg_code = self._safety_alert_data["sgg_code"]
+        if user_input is not None:
+            emd_code = user_input["emd_code"]
+            emd_name = self._safety_alert_data["emd_options"][emd_code]
+            sgg_name = self._safety_alert_data["sgg_name"]
+            sido_name = self._safety_alert_data["sido_name"]
+            data = dict(self._config_entry.data)
+            data.update(
+                {
+                    "area_code": sido_code,
+                    "area_name": f"{sido_name} {sgg_name} {emd_name}",
+                    "area_code2": sgg_code,
+                    "area_name2": sgg_name,
+                    "area_code3": emd_code,
+                    "area_name3": emd_name,
+                    "sido_code": sido_code,
+                    "sido_name": sido_name,
+                }
+            )
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=data, title=f"안전알림 ({data['area_name']})"
+            )
+            await self.hass.config_entries.async_reload(self._config_entry.entry_id)
+            return self.async_create_entry(title="", data={})
+
+        client = SafetyAlertRegionApiClient()
+        emd_list = await client.async_get_emd_list(sido_code, sgg_code)
+        if not emd_list:
+            return self.async_abort(reason="cannot_connect")
+        emd_options = {region["code"]: region["name"] for region in emd_list}
+        self._safety_alert_data["emd_options"] = emd_options
+        current_emd = self._config_entry.data.get("area_code3", "")
+        default_emd = current_emd if current_emd in emd_options else next(iter(emd_options))
+        return self.async_show_form(
+            step_id="safety_alert_options_emd",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "emd_code",
+                        default=default_emd,
+                    ): vol.In(emd_options),
+                }
+            ),
+            description_placeholders={
+                "sgg_name": self._safety_alert_data["sgg_name"]
+            },
+        )
 
 async def fetch_stop_data(session: aiohttp.ClientSession, stop_id: str) -> dict:
     """Fetch bus stop data from KakaoMap."""
