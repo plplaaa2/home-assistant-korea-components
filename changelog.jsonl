@@ -1,0 +1,1 @@
+{"version":"dev-2026.10.01.1","date":"2026-10-01","description":"Detect Safe Korea HTTP-200 emergency pages and invalid HTML responses; preserve the last successful safety-alert values on data-validation errors. Expose stale-data status and add offline regression checks for both implementations. Public version unchanged."}

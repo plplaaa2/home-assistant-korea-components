@@ -11,7 +11,10 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .api import SafetyAlertApiClient
-from .exceptions import SafetyAlertConnectionError, SafetyAlertDataError
+from .exceptions import (
+    SafetyAlertConnectionError,
+    SafetyAlertDataError,
+)
 from ..const import DOMAIN, LOGGER, TZ_ASIA_SEOUL
 
 
@@ -91,13 +94,36 @@ class SafetyAlertDevice:
                     "data": parsed_data,
                 },
                 "last_updated": datetime.now(TZ_ASIA_SEOUL).isoformat(),
+                "data_stale": False,
+                "update_error": None,
             }
 
             self._available = True
             self._last_update_success = datetime.now(TZ_ASIA_SEOUL)
             LOGGER.debug(f"Safety Alert data updated successfully for {self.area_name}")
 
-        except (SafetyAlertConnectionError, SafetyAlertDataError) as err:
+        # Keep successful data when emergency or invalid HTML replaces the SMS board.
+        # Related files: api.py, exceptions.py, sensor.py.
+        except SafetyAlertDataError as err:
+            if self._last_update_success is None:
+                self._available = False
+                raise UpdateFailed(
+                    f"Safety Alert data temporarily unavailable: {err}"
+                ) from err
+            if not self.data.get("data_stale"):
+                LOGGER.warning(
+                    "Safety Alert updates delayed for %s; retaining last successful data: %s",
+                    self.area_name,
+                    err,
+                )
+            self.data = {
+                **self.data,
+                "data_stale": True,
+                "update_error": str(err),
+            }
+            self._available = True
+
+        except SafetyAlertConnectionError as err:
             self._available = False
             LOGGER.error(
                 f"Error updating Safety Alert data for {self.area_name}: {err}"

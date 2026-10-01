@@ -9,7 +9,11 @@ from typing import Dict, Any, List, Optional
 import curl_cffi
 from bs4 import BeautifulSoup
 
-from .exceptions import SafetyAlertConnectionError
+from .exceptions import (
+    SafetyAlertConnectionError,
+    SafetyAlertDataError,
+    SafetyAlertServiceUnavailable,
+)
 from ..const import LOGGER, TZ_ASIA_SEOUL
 
 _BASE_URL = "https://www.safekorea.go.kr/safekorea-kor/ctim/cmsg/calamitySms.do"
@@ -65,7 +69,7 @@ class SafetyAlertApiClient:
                 LOGGER.debug("Safety Alert HTML length: %d", len(html))
                 return self._parse_html(html)
 
-        except SafetyAlertConnectionError:
+        except (SafetyAlertConnectionError, SafetyAlertDataError):
             raise
         except Exception as e:
             LOGGER.error("Safety Alert API request failed: %s", e)
@@ -76,9 +80,23 @@ class SafetyAlertApiClient:
         soup = BeautifulSoup(html, "html.parser")
         alerts: List[Dict[str, Any]] = []
 
-        # 전체 건수
+        # Reject HTTP-200 emergency pages before replacing device data.
+        # Related files: exceptions.py, device.py, sensor.py.
+        page_text = soup.get_text(" ", strip=True)
+        if "긴급서비스 페이지" in page_text and "이용이 제한" in page_text:
+            raise SafetyAlertServiceUnavailable(
+                "Safe Korea temporarily switched to its emergency service page"
+            )
+        board = soup.select_one("div.board-listarea table tbody")
         count_span = soup.select_one("div.board-count span")
-        total_count = int(count_span.get_text(strip=True)) if count_span else 0
+        if board is None or count_span is None:
+            raise SafetyAlertDataError("Safety Alert response is missing the SMS board")
+
+        # 전체 건수
+        count_text = count_span.get_text(strip=True).replace(",", "")
+        if not count_text.isdecimal():
+            raise SafetyAlertDataError("Safety Alert response has an invalid total count")
+        total_count = int(count_text)
 
         # 웹용 테이블 파싱 (board-listarea)
         rows = soup.select("div.board-listarea table tbody tr")
@@ -123,6 +141,11 @@ class SafetyAlertApiClient:
                 "RCV_AREA_NM": rcv_area,
                 "REGIST_DT": regist_dt,
             })
+
+        if total_count > 0 and (not alerts or any(not a["MSG_CN"] for a in alerts)):
+            raise SafetyAlertDataError("Safety Alert response has incomplete SMS rows")
+        if total_count == 0 and alerts:
+            raise SafetyAlertDataError("Safety Alert response has an inconsistent total count")
 
         LOGGER.debug("Parsed %d alerts (total: %d)", len(alerts), total_count)
 
