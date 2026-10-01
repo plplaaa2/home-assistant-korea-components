@@ -1,6 +1,6 @@
 """Offline regression checks using real safety-alert classes with dependency stubs.
 
-Related files: both safety-alert api.py, device.py, exceptions.py implementations.
+Related files: both safety-alert api.py, device.py, exceptions.py and sensor.py implementations.
 Run: python tools/test_safety_alert_fallback.py
 """
 
@@ -234,6 +234,47 @@ class FallbackTests(unittest.TestCase):
                 data["update_error"] = None
                 self.assertFalse(sensor.extra_state_attributes["data_stale"])
                 self.assertIsNone(sensor.extra_state_attributes["update_error"])
+
+    def test_standalone_timestamp_values(self):
+        base = "custom_components/korea_safety"
+        if base not in IMPLEMENTATIONS:
+            self.skipTest("Standalone integration is not present in this checkout")
+        ns = load_classes(base)
+        ns["CoordinatorEntity"] = type("CoordinatorEntity", (), {})
+        ns["SensorEntity"] = type("SensorEntity", (), {})
+        ns["SensorDeviceClass"] = SimpleNamespace(TIMESTAMP="timestamp")
+        ns["ZoneInfo"] = ZoneInfo
+        path = ROOT / base / "sensor.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        nodes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), ns)
+        sensor = object.__new__(ns["SafetyAlertMessageSensor"])
+        sensor._attr_device_class = "timestamp"
+        sensor._field = "REGIST_DT"
+        def set_alert(value):
+            sensor.coordinator = SimpleNamespace(
+                data={"parsed_data": {"data": [{"REGIST_DT": value}]}})
+        for raw in ("2026/09/26 17:00:38", " 2026/09/26 17:00:38 "):
+            with self.subTest(raw=raw):
+                set_alert(raw)
+                value = sensor.native_value
+                self.assertIsInstance(value, datetime)
+                self.assertIsNotNone(value.tzinfo)
+                self.assertEqual(value.utcoffset(), timedelta(hours=9))
+                self.assertEqual(value.isoformat(), "2026-09-26T17:00:38+09:00")
+        for raw in ("", " ", None, "invalid", "2026/02/30 17:00:38", 123):
+            with self.subTest(raw=raw):
+                set_alert(raw)
+                self.assertIsNone(sensor.native_value)
+        sensor.coordinator = SimpleNamespace(data={})
+        self.assertIsNone(sensor.native_value)
+        sensor.coordinator = SimpleNamespace(data=None)
+        self.assertIsNone(sensor.native_value)
+        sensor._attr_device_class = None
+        sensor._field = "MSG_CN"
+        sensor.coordinator = SimpleNamespace(
+            data={"parsed_data": {"data": [{"MSG_CN": "기존 알림"}]}})
+        self.assertEqual(sensor.native_value, "기존 알림")
 
 
 if __name__ == "__main__":
