@@ -1036,17 +1036,10 @@ class KoreaSensor(CoordinatorEntity, SensorEntity):
         """Return if entity is available."""
         return self._device.available and self.coordinator.last_update_success
 
-    # Expose safety-alert freshness; related: safety_alert/api.py, safety_alert/device.py.
+    # Keep alert attributes stable for state-triggered TTS; related: safety_alert/device.py.
     @property
     def extra_state_attributes(self) -> Optional[Dict[str, Any]]:
-        if not isinstance(self._device, SafetyAlertDevice):
-            return None
-        data = self.coordinator.data or {}
-        return {
-            "data_stale": data.get("data_stale", False),
-            "last_successful_update": data.get("last_updated"),
-            "update_error": data.get("update_error"),
-        }
+        return None
 
     @property
     def native_value(self) -> Any:

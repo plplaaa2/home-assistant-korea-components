@@ -36,15 +36,10 @@ class _SafetySensor(CoordinatorEntity, SensorEntity):
     def available(self) -> bool:
         return self._device.available and self.coordinator.last_update_success
 
-    # Expose cached-data freshness; related: api.py, device.py.
+    # Keep alert attributes stable for state-triggered TTS; related: device.py.
     @property
     def extra_state_attributes(self):
-        data = self.coordinator.data or {}
-        return {
-            "data_stale": data.get("data_stale", False),
-            "last_successful_update": data.get("last_updated"),
-            "update_error": data.get("update_error"),
-        }
+        return None
 
 
 class SafetyAlertMessageSensor(_SafetySensor):

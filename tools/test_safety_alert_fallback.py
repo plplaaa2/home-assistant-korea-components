@@ -193,7 +193,8 @@ class FallbackTests(unittest.TestCase):
             with self.subTest(base=base):
                 asyncio.run(scenario(base))
 
-    def test_sensor_freshness_attributes(self):
+    # Prevent repeated TTS on polling and fallback; related: both sensor.py files.
+    def test_sensor_attributes_stay_stable(self):
         for base in IMPLEMENTATIONS:
             with self.subTest(base=base):
                 ns = load_classes(base)
@@ -225,15 +226,11 @@ class FallbackTests(unittest.TestCase):
                     "update_error": "Emergency",
                 }
                 sensor.coordinator = SimpleNamespace(data=data)
-                self.assertEqual(sensor.extra_state_attributes, {
-                    "data_stale": True,
-                    "last_successful_update": data["last_updated"],
-                    "update_error": "Emergency",
-                })
+                self.assertIsNone(sensor.extra_state_attributes)
                 data["data_stale"] = False
                 data["update_error"] = None
-                self.assertFalse(sensor.extra_state_attributes["data_stale"])
-                self.assertIsNone(sensor.extra_state_attributes["update_error"])
+                data["last_updated"] = "2026-10-01T20:05:00+09:00"
+                self.assertIsNone(sensor.extra_state_attributes)
 
     def test_standalone_timestamp_values(self):
         base = "custom_components/korea_safety"
