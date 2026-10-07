@@ -10,7 +10,7 @@
   "issue_tracker": "https://github.com/hwajin-me/home-assistant-korea-components/issues",
   "requirements": [
     "aiohttp>=3.9.5",
-    "beautifulsoup4>=4.13.0",
+    "beautifulsoup4>=4.9.3",
     "soupsieve>=2.4.1",
     "cryptography>=42.0.8",
     "curl-cffi>=0.7.4",

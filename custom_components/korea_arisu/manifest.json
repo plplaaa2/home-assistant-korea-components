@@ -1,0 +1,11 @@
+{
+  "domain": "korea_arisu",
+  "name": "Seoul Arisu Water",
+  "codeowners": ["@hwajin-me"],
+  "config_flow": true,
+  "documentation": "https://github.com/hwajin-me/ha-korea-arisu",
+  "issue_tracker": "https://github.com/hwajin-me/ha-korea-arisu/issues",
+  "iot_class": "cloud_polling",
+  "requirements": ["beautifulsoup4>=4.9.3", "curl-cffi>=0.7.4"],
+  "version": "0.1.3"
+}
