@@ -51,6 +51,8 @@ class SafetyAlertDevice:
             "last_updated": None,
         }
         self._last_update_success: Optional[datetime] = None
+        # Rate-limit persistent warnings; related: api.py, sensor.py.
+        self._last_stale_warning: Optional[datetime] = None
 
     @property
     def unique_id(self) -> str:
@@ -85,6 +87,7 @@ class SafetyAlertDevice:
             parsed_data: List[Dict[str, Any]] = result.get("disasterSmsList", [])
             count: int = result.get("rtnResult", {}).get("totCnt", 0)
 
+            recovering = self.data.get("data_stale", False) or not self._available
             self.data = {
                 "has_data": len(parsed_data) > 0,
                 "metadata": {
@@ -100,6 +103,9 @@ class SafetyAlertDevice:
 
             self._available = True
             self._last_update_success = datetime.now(TZ_ASIA_SEOUL)
+            if recovering:
+                LOGGER.warning("Safety Alert updates recovered for %s; count=%s", self.area_name, count)
+            self._last_stale_warning = None
             LOGGER.debug(f"Safety Alert data updated successfully for {self.area_name}")
 
         # Keep successful data when emergency or invalid HTML replaces the SMS board.
@@ -107,15 +113,20 @@ class SafetyAlertDevice:
         except SafetyAlertDataError as err:
             if self._last_update_success is None:
                 self._available = False
+                LOGGER.error("Safety Alert initial data unavailable for %s: %s", self.area_name, err)
                 raise UpdateFailed(
                     f"Safety Alert data temporarily unavailable: {err}"
                 ) from err
-            if not self.data.get("data_stale"):
+            now = datetime.now(TZ_ASIA_SEOUL)
+            if self._last_stale_warning is None or (now - self._last_stale_warning).total_seconds() >= 1800:
                 LOGGER.warning(
-                    "Safety Alert updates delayed for %s; retaining last successful data: %s",
+                    "Safety Alert updates delayed for %s; last success=%s; stale seconds=%d; retaining cached data: %s",
                     self.area_name,
+                    self._last_update_success.isoformat(),
+                    (now - self._last_update_success).total_seconds(),
                     err,
                 )
+                self._last_stale_warning = now
             self.data = {
                 **self.data,
                 "data_stale": True,

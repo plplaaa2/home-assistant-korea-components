@@ -27,4 +27,5 @@ tests/
 tools/
   test_safety_alert_fallback.py  # Offline emergency-page regression checks
   test_safety_alert_region.py
+  test_safety_alert_options.py  # Offline existing-entry region options checks
 ```
